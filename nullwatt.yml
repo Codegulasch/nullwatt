@@ -1,198 +1,272 @@
 blueprint:
-  name: Noah Expert 0.1.5
-  author: Alkly / Nasengulasch
+  name: Nullwatt 0.2.0
+  author: Nasengulasch
   source_url: https://codegulasch.de
   description: |
-    Erweiterung von Alkly.de Minimal für Tag, Abend und Nachteinspeisung mit NOAH 2000 Speicher.
-    
+    Nulleinspeisungs-Regelung für Balkonkraftwerk-Wechselrichter (z. B. Hoymiles über OpenDTU/AhoyDTU)
+    mit Growatt **NOAH 2000** Speicher.
+ 
+    **So funktioniert's**
+    - Drei Phasen (Tag, Abend, Nacht) mit eigener Maximal-Einspeisung und eigenem Speicher-Output.
+    - Zeitfenster gelten von Startzeit (inklusive) bis Endzeit (exklusive) und dürfen über Mitternacht gehen.
+      Gleiche Start- und Endzeit deaktiviert eine Phase. Überschneiden sich Phasen, gilt: Tag vor Abend vor Nacht.
+    - Im Begrenzungsfenster wird der Speicher-Output auf den konfigurierten Wert gesetzt, unabhängig von der Phase.
+    - Werte werden nur geschrieben, wenn sie sich wirklich ändern (schont DTU und NOAH-Cloud-API).
+    - Ist der Smart Meter oder das Wechselrichter-Limit nicht verfügbar, wird nichts am Wechselrichter verändert.
+ 
+    Smart-Meter-Konvention: **positiv = Netzbezug, negativ = Einspeisung**. Andernfalls Vorzeichen umkehren.
   domain: automation
+  homeassistant:
+    min_version: 2024.10.0
+ 
   input:
-    smart_meter:
-      name: Smart Meter Sensor
-      description: Sensor für den aktuellen Bezug Stromverbrauch deines Hauses in Watt (z.B. Shelly 3EM).
-      selector:
-        entity:
-          domain:
-            - sensor
-          multiple: false
-    bkw_einspeisung:
-      name: Einspeisung Input Nummer
-      description: Input Number für die Berechnung der Einspeisung. Bitte als Helfer anlegen.
-      selector:
-        entity:
-          domain:
-            - input_number
-          multiple: false
-    hms_limit:
-      name: Wechselrichter Limit Nummer
-      description: Nummer zur Steuerung des Wechselrichters in Watt.
-      selector:
-        entity:
-          domain:
-            - number
-          multiple: false
-    storage_entity:
-      name: Batteriespeicher Entität
-      description: Entität für den Batteriespeicher SOC (Vorbereitung nächste Version).
-      selector:
-        entity:
-          domain:
-            - sensor
-          multiple: false
-    storage_output_entity:
-      name: Batteriespeicher Output Entität
-      description: Nummer für den Output des Batteriespeichers (Bei NOAH 2000 = number.noah_2000_system_output_power).
-      selector:
-        entity:
-          domain:
-            - number
-          multiple: false
-    adjustment_watt:
-      name: Anpassungswert in Watt
-      description: Wert in Watt, der von der Berechnung abgezogen wird (z.B. 15 Watt als Puffer).
-      default: 15
-      selector:
-        number:
-          min: 0.5
-          max: 100.0
-          step: 1.0
-          mode: slider
-    min_einspeisung:
-      name: Minimale Einspeisung in Watt
-      description: Minimaler Wert für die Einspeisung (z.B. 50 Watt für Hoymiles oder 100 Watt für Anker Wechselrichter).
-      default: 100
-      selector:
-        number:
-          min: 0
-          max: 150.0
-          step: 5.0
-          mode: slider
-          
-    Tageseinspeisung:
-      name: "Einstellungen Tageseinspeisung"
-      icon: mdi:white-balance-sunny
-      collapsed: true
+    Grundeinstellungen:
+      name: Grundeinstellungen
+      icon: mdi:cog
+      description: Messung und Wechselrichter.
       input:
-      
-        max_einspeisung_tag:
-          name: Maximale Einspeisung Tag Entität
-          description: Entität für die maximale Einspeisung tagsüber (z.B. Input Number).
+        smart_meter:
+          name: Smart Meter Sensor
+          description: Aktuelle Netzleistung des Hauses in Watt (z. B. Shelly 3EM).
           selector:
             entity:
-              domain:
-                - input_number
-              multiple: false
+              filter:
+                - domain: sensor
+                  device_class: power
+        smart_meter_invertiert:
+          name: Vorzeichen des Smart Meters umkehren
+          description: Aktivieren, wenn dein Zähler Netzbezug negativ meldet.
+          default: false
+          selector:
+            boolean: {}
+        hms_limit:
+          name: Wechselrichter-Limit
+          description: Nummer zur Steuerung des Wechselrichter-Limits in Watt.
+          selector:
+            entity:
+              filter:
+                - domain: number
+        bkw_einspeisung:
+          name: Anzeige-Helfer Einspeisung
+          description: Input Number, in die der berechnete Sollwert zur Anzeige/Historie geschrieben wird.
+          selector:
+            entity:
+              filter:
+                - domain: input_number
+ 
+    Regelung:
+      name: Regelparameter
+      icon: mdi:tune-variant
+      collapsed: true
+      input:
+        adjustment_watt:
+          name: Puffer
+          description: Wird vom berechneten Sollwert abgezogen, damit sicher kein Strom ins Netz fließt.
+          default: 15
+          selector:
+            number:
+              min: 0
+              max: 200
+              step: 1
+              unit_of_measurement: W
+              mode: slider
+        hysterese_watt:
+          name: Hysterese
+          description: Das Limit wird erst geändert, wenn der neue Sollwert um mindestens diesen Wert abweicht.
+          default: 10
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: W
+              mode: slider
+        min_einspeisung:
+          name: Minimale Einspeisung
+          description: Untergrenze des Limits (z. B. 50 W für Hoymiles, 100 W für Anker).
+          default: 100
+          selector:
+            number:
+              min: 0
+              max: 150
+              step: 5
+              unit_of_measurement: W
+              mode: slider
+ 
+    Speicher:
+      name: Batteriespeicher (NOAH)
+      icon: mdi:home-battery
+      collapsed: true
+      input:
+        storage_entity:
+          name: Speicher-Ladezustand (SOC)
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: battery
+        storage_output_entity:
+          name: Speicher-Output
+          description: Bei NOAH 2000 z. B. number.noah_2000_system_output_power.
+          selector:
+            entity:
+              filter:
+                - domain: number
+        min_soc:
+          name: Minimaler Ladezustand
+          description: Bei Erreichen dieses SOC wird der Speicher-Output auf 0 gesetzt. 0 = deaktiviert.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+ 
+    Tageseinspeisung:
+      name: Tageseinspeisung
+      icon: mdi:weather-sunny
+      collapsed: true
+      input:
+        max_einspeisung_tag:
+          name: Maximale Einspeisung
+          description: Helfer mit der maximalen Wechselrichterleistung tagsüber.
+          selector:
+            entity:
+              filter:
+                - domain: [input_number, number]
         start_time_tag:
-          name: Startzeit Tageseinspeisung
-          description: Uhrzeit, zu der die Tageseinspeisung beginnt (HH:MM:SS).
-          default: "07:30:10"
+          name: Startzeit
+          default: "07:30:00"
           selector:
             time: {}
         end_time_tag:
-          name: Endzeit Tageseinspeisung
-          description: Uhrzeit, zu der die Tageseinspeisung endet (HH:MM:SS).
+          name: Endzeit
           default: "18:00:00"
           selector:
-            time: {}  
-        
+            time: {}
+        storage_output_tag:
+          name: Speicher-Output
+          description: Gilt außerhalb des Begrenzungsfensters.
+          default: 800
+          selector:
+            number:
+              min: 0
+              max: 1000
+              step: 10
+              unit_of_measurement: W
+              mode: slider
+ 
     Abendeinspeisung:
-      name: "Einstellungen Abendeinspeisung"
-      icon: mdi:white-balance-sunny
+      name: Abendeinspeisung
+      icon: mdi:weather-sunset
       collapsed: true
       input:
-        
         max_einspeisung_abend:
-          name: Maximale Einspeisung Abend Entität
-          description: Entität für die maximale Einspeisung am Abend (z.B. Input Number).
+          name: Maximale Einspeisung
+          description: Helfer mit der maximalen Wechselrichterleistung am Abend.
           selector:
             entity:
-              domain:
-                - input_number
-              multiple: false
+              filter:
+                - domain: [input_number, number]
         start_time_abend:
-          name: Startzeit Abendeinspeisung
-          description: Uhrzeit, zu der die Abendeinspeisung beginnt (HH:MM:SS).
-          default: "18:00:05"
+          name: Startzeit
+          default: "18:00:00"
           selector:
             time: {}
         end_time_abend:
-          name: Endzeit Abendeinspeisung
-          description: Uhrzeit, zu der die Abendeinspeisung endet (HH:MM:SS).
-          default: "23:59:55"
+          name: Endzeit
+          default: "00:00:00"
           selector:
             time: {}
-        
+        storage_output_abend:
+          name: Speicher-Output
+          default: 800
+          selector:
+            number:
+              min: 0
+              max: 1000
+              step: 10
+              unit_of_measurement: W
+              mode: slider
+ 
     Nachteinspeisung:
-      name: "Einstellungen Nachteinspeisung"
-      icon: mdi:white-balance-sunny
+      name: Nachteinspeisung
+      icon: mdi:weather-night
       collapsed: true
-      input:    
-            
+      input:
         max_einspeisung_nacht:
-          name: Maximale Einspeisung Nacht Entität
-          description: Entität für die maximale Einspeisung nachts (z.B. Input Number).
+          name: Maximale Einspeisung
+          description: Helfer mit der maximalen Wechselrichterleistung nachts.
           selector:
             entity:
-              domain:
-                - input_number
-              multiple: false
+              filter:
+                - domain: [input_number, number]
         start_time_nacht:
-          name: Startzeit Nachteinspeisung
-          description: Uhrzeit, zu der die Nachteinspeisung beginnt (HH:MM:SS).
+          name: Startzeit
           default: "00:00:00"
           selector:
             time: {}
         end_time_nacht:
-          name: Endzeit Nachteinspeisung
-          description: Uhrzeit, zu der die Nachteinspeisung endet (HH:MM:SS).
+          name: Endzeit
           default: "07:30:00"
           selector:
             time: {}
-        
+        storage_output_nacht:
+          name: Speicher-Output
+          default: 800
+          selector:
+            number:
+              min: 0
+              max: 1000
+              step: 10
+              unit_of_measurement: W
+              mode: slider
+ 
     Einspeisungsbegrenzung:
-      name: "Batterieeinspeisung begrenzen"
-      icon: mdi:white-balance-sunny
+      name: Speicher-Output zeitweise begrenzen
+      icon: mdi:battery-lock
       collapsed: true
       input:
-    
         storage_zero_value:
-          name: Wert für Speicher-Output der zu einer bestimmten Zeit gesetzt wird
-          description: Wert, auf den der Batteriespeicher-Output gesetzt werden soll (z.B. 200).
+          name: Begrenzter Speicher-Output
+          description: Helfer mit dem Wert, auf den der Speicher-Output im Fenster gesetzt wird (z. B. 200).
           selector:
             entity:
-              domain:
-                - input_number
-              multiple: false
+              filter:
+                - domain: input_number
         storage_zero_start:
-          name: Startzeit Speicher-Output auf konfigurierten Wert setzen
-          description: Uhrzeit, zu der der Batteriespeicher-Output auf den konfigurierten Wert gesetzt wird (HH:MM:SS).
+          name: Startzeit
           default: "07:30:00"
           selector:
             time: {}
         storage_zero_end:
-          name: Endzeit Speicher-Output auf konfigurierten Wert setzen
-          description: Uhrzeit, zu der der Batteriespeicher-Output wieder normalisiert wird (HH:MM:SS).
+          name: Endzeit
           default: "11:00:00"
           selector:
             time: {}
-
-trigger:
-  - platform: state
+ 
+triggers:
+  - trigger: state
     entity_id: !input smart_meter
-  - platform: time_pattern
+    to: ~ # nur echte Zustandsänderungen, keine Attribut-Updates
+  - trigger: time_pattern
     minutes: "/1"
-
-condition: []
-
+  - trigger: homeassistant
+    event: start
+ 
 variables:
   smart_meter_id: !input smart_meter
-  bkw_einspeisung_id: !input bkw_einspeisung
+  smart_meter_invertiert: !input smart_meter_invertiert
   hms_limit_id: !input hms_limit
+  bkw_einspeisung_id: !input bkw_einspeisung
+  adjustment_watt: !input adjustment_watt
+  hysterese_watt: !input hysterese_watt
+  min_einspeisung: !input min_einspeisung
   storage_entity_id: !input storage_entity
   storage_output_entity_id: !input storage_output_entity
-  storage_zero_value_id: !input storage_zero_value
-  adjustment_watt: !input adjustment_watt
-  min_einspeisung: !input min_einspeisung
+  min_soc: !input min_soc
   max_einspeisung_tag_id: !input max_einspeisung_tag
   max_einspeisung_abend_id: !input max_einspeisung_abend
   max_einspeisung_nacht_id: !input max_einspeisung_nacht
@@ -202,146 +276,122 @@ variables:
   end_time_abend: !input end_time_abend
   start_time_nacht: !input start_time_nacht
   end_time_nacht: !input end_time_nacht
+  storage_output_tag: !input storage_output_tag
+  storage_output_abend: !input storage_output_abend
+  storage_output_nacht: !input storage_output_nacht
+  storage_zero_value_id: !input storage_zero_value
   storage_zero_start: !input storage_zero_start
   storage_zero_end: !input storage_zero_end
-
-action:
-  - choose:
-      
-      # Logik für Tageseinspeisung
-      - conditions:
+ 
+actions:
+  - variables:
+      # Aktive Phase bestimmen (letzter Treffer gewinnt → Tag hat Vorrang)
+      phase: >
+        {% set t = now().strftime('%H:%M:%S') %}
+        {% set ns = namespace(p='aus') %}
+        {% for name, s, e in [
+             ('nacht', start_time_nacht, end_time_nacht),
+             ('abend', start_time_abend, end_time_abend),
+             ('tag', start_time_tag, end_time_tag)] %}
+          {% set a = today_at(s).strftime('%H:%M:%S') %}
+          {% set b = today_at(e).strftime('%H:%M:%S') %}
+          {% if (a < b and a <= t and t < b) or (a > b and (t >= a or t < b)) %}
+            {% set ns.p = name %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.p }}
+      limit_active: >
+        {% set t = now().strftime('%H:%M:%S') %}
+        {% set a = today_at(storage_zero_start).strftime('%H:%M:%S') %}
+        {% set b = today_at(storage_zero_end).strftime('%H:%M:%S') %}
+        {{ (a < b and a <= t and t < b) or (a > b and (t >= a or t < b)) }}
+ 
+      # Wechselrichter-Regelung
+      sensors_ok: "{{ is_number(states(smart_meter_id)) and is_number(states(hms_limit_id)) }}"
+      grid: "{{ (states(smart_meter_id) | float(0)) * (-1 if smart_meter_invertiert else 1) }}"
+      current_limit: "{{ states(hms_limit_id) | float(0) }}"
+      lower: "{{ [min_einspeisung | float(0), state_attr(hms_limit_id, 'min') | float(0)] | max }}"
+      upper: >
+        {% set ids = {'tag': max_einspeisung_tag_id, 'abend': max_einspeisung_abend_id, 'nacht': max_einspeisung_nacht_id} %}
+        {% set phase_max = (states(ids[phase]) | float(lower)) if phase in ids else lower %}
+        {% set hw_max = state_attr(hms_limit_id, 'max') | float(phase_max) %}
+        {{ [[phase_max, hw_max] | min, lower] | max }}
+      target: >
+        {% set raw = grid + current_limit - adjustment_watt %}
+        {{ ([lower, [raw, upper] | min] | max) | round(0) | int }}
+      update_limit: >
+        {{ target != current_limit and (
+             (target - current_limit) | abs >= hysterese_watt
+             or target == lower or target == upper) }}
+      helper_value: >
+        {% set v = target if phase != 'aus' else 0 %}
+        {% set lo = state_attr(bkw_einspeisung_id, 'min') | float(0) %}
+        {% set hi = state_attr(bkw_einspeisung_id, 'max') | float(v) %}
+        {{ [lo, [v, hi] | min] | max }}
+ 
+      # Speicher-Output (-1 = nicht verändern)
+      storage_target: >
+        {% set soc = states(storage_entity_id) %}
+        {% if min_soc | float(0) > 0 and is_number(soc) and soc | float <= min_soc | float(0) %}
+          {% set v = 0 %}
+        {% elif limit_active %}
+          {% set v = states(storage_zero_value_id) | float(-1) %}
+        {% elif phase == 'tag' %}
+          {% set v = storage_output_tag %}
+        {% elif phase == 'abend' %}
+          {% set v = storage_output_abend %}
+        {% elif phase == 'nacht' %}
+          {% set v = storage_output_nacht %}
+        {% else %}
+          {% set v = -1 %}
+        {% endif %}
+        {% if v | float(-1) < 0 %}
+          -1
+        {% else %}
+          {% set lo = state_attr(storage_output_entity_id, 'min') | float(0) %}
+          {% set hi = state_attr(storage_output_entity_id, 'max') | float(v | float) %}
+          {{ ([lo, [v | float, hi] | min] | max) | round(0) | int }}
+        {% endif %}
+      update_storage: >
+        {{ storage_target | int(-1) >= 0
+           and states(storage_output_entity_id) | float(-1) != storage_target | float }}
+ 
+  - if:
+      - condition: template
+        value_template: "{{ sensors_ok }}"
+    then:
+      - if:
           - condition: template
-            value_template: >
-              {{ strptime(start_time_tag, '%H:%M:%S').time() <= now().time() <= strptime(end_time_tag, '%H:%M:%S').time() }}
-        sequence:
-          - service: input_number.set_value
-            target:
-              entity_id: !input bkw_einspeisung
-            data:
-              value: >
-                {% set current_load = states(smart_meter_id) | float %}
-                {% set max_einspeisung = states(max_einspeisung_tag_id) | float %}
-                {% set current_output = states(hms_limit_id) | float %}
-                {% set required_output = current_load + current_output - adjustment_watt %}
-
-                {% if required_output < 0 %} 
-                  {% set required_output = current_output + required_output %}
-                {% endif %} 
-                {% if required_output > max_einspeisung %}
-                  {{ max_einspeisung }}
-                {% elif required_output < min_einspeisung %}
-                  {{ min_einspeisung }}
-                {% else %}
-                  {{ required_output }}
-                {% endif %}
-          - service: number.set_value
+            value_template: "{{ update_limit }}"
+        then:
+          - action: number.set_value
             target:
               entity_id: !input hms_limit
             data:
-              value: '{{ states(bkw_einspeisung_id) | float }}'
-
-          - service: number.set_value
-            target:
-              entity_id: !input storage_output_entity
-            data:
-              value: >
-                {{ states(storage_zero_value_id) | float }}
-                
-      # Logik für Abendeinspeisung  
-      - conditions:
+              value: "{{ target }}"
+      - if:
           - condition: template
-            value_template: >
-              {{ strptime(start_time_abend, '%H:%M:%S').time() <= now().time() <= strptime(end_time_abend, '%H:%M:%S').time() }}
-        sequence:
-          - service: input_number.set_value
+            value_template: "{{ states(bkw_einspeisung_id) | float(-1) != helper_value }}"
+        then:
+          - action: input_number.set_value
             target:
               entity_id: !input bkw_einspeisung
             data:
-              value: >
-                {% set current_load = states(smart_meter_id) | float %}
-                {% set max_einspeisung = states(max_einspeisung_abend_id) | float %}
-                {% set current_output = states(hms_limit_id) | float %} 
-                {% set required_output = current_load + current_output - adjustment_watt %}
-                {% if required_output < 0 %} 
-                  {% set required_output = current_output + required_output %}
-                {% endif %} 
-                {% if required_output > max_einspeisung %}
-                  {{ max_einspeisung }}
-                {% elif required_output < min_einspeisung %}
-                  {{ min_einspeisung }}
-                {% else %}
-                  {{ required_output }}
-                {% endif %}
-          - service: number.set_value
-            target:
-              entity_id: !input hms_limit
-            data:
-              value: '{{ states(bkw_einspeisung_id) | float }}'
-          - service: number.set_value
-            target:
-              entity_id: !input storage_output_entity
-            data:
-              value: 800  # Setzt den Speicherwert auf 800 während der Abendeinspeisung
-        
-      # Logik für Nachteinspeisung
-      - conditions:
-          - condition: template
-            value_template: >
-              {{ strptime(start_time_nacht, '%H:%M:%S').time() <= now().time() <= strptime(end_time_nacht, '%H:%M:%S').time() }}
-
-        sequence:
-          - service: input_number.set_value
-            target:
-              entity_id: !input bkw_einspeisung
-            data:
-              value: >
-                {% set current_load = states(smart_meter_id) | float %}
-                {% set max_einspeisung = states(max_einspeisung_nacht_id) | float %}
-                {% set current_output = states(hms_limit_id) | float %} 
-                {% set required_output = current_load + current_output - adjustment_watt %}
-                {% if required_output < 0 %} 
-                  {% set required_output = current_output + required_output %}
-                {% endif %} 
-                {% if required_output > max_einspeisung %}
-                  {{ max_einspeisung }}
-                {% elif required_output < min_einspeisung %}
-                  {{ min_einspeisung }}
-                {% else %}
-                  {{ required_output }}
-                {% endif %}
-          - service: number.set_value
-            target:
-              entity_id: !input hms_limit
-            data:
-              value: '{{ states(bkw_einspeisung_id) | float }}'
-          - service: number.set_value
-            target:
-              entity_id: !input storage_output_entity
-            data:
-              value: 800  # Setzt den Speicherwert auf 800 während der Nachteinspeisung
-      
-      # Logik für Zeitreglung um den NOAH zu begrenzen  
-      - conditions:
-          - condition: template
-            value_template: >
-              {{ strptime(storage_zero_start, '%H:%M:%S').time() <= now().time() <= strptime(storage_zero_end, '%H:%M:%S').time() }}
-        
-        sequence:
-          - service: number.set_value
-            target:
-              entity_id: !input storage_output_entity
-            data:
-              value: >
-                {{ states(storage_zero_value_id) | float }}
-      
-    default: 
-      - service: input_number.set_value
+              value: "{{ helper_value }}"
+ 
+  - if:
+      - condition: template
+        value_template: "{{ update_storage }}"
+    then:
+      - action: number.set_value
+        continue_on_error: true
         target:
-          entity_id: !input bkw_einspeisung
+          entity_id: !input storage_output_entity
         data:
-          value: 0
-
-mode: restart
-
+          value: "{{ storage_target }}"
+ 
+mode: single
+max_exceeded: silent
+ 
 trace:
   stored_traces: 30
